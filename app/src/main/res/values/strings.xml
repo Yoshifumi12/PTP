@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">CameraPTP</string>
+    <string name="waiting_for_camera_connection">Waiting for camera connection...</string>
+    <string name="download_photo">Download Photo</string>
+</resources>
