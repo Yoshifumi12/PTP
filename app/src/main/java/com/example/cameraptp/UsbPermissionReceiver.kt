@@ -23,13 +23,14 @@ class UsbPermissionReceiver : BroadcastReceiver() {
 
             device?.let {
                 val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
+                Log.d("PTP", "Has permission already? ${usbManager.hasPermission(it)}")
                 val permissionIntent = PendingIntent.getBroadcast(
                     context,
                     0,
                     Intent("com.example.cameraptp.USB_PERMISSION"),
                     PendingIntent.FLAG_IMMUTABLE
                 )
-
+                Log.d("PTP", "Requesting permission for device: ${device.deviceName}")
                 usbManager.requestPermission(it, permissionIntent)
             }
         }

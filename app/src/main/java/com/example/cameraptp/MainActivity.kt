@@ -1,5 +1,8 @@
 package com.example.cameraptp
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
 import android.content.IntentFilter
 import android.hardware.usb.*
 import android.os.Build
@@ -24,7 +27,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var downloadButton: Button
     private lateinit var usbManager: UsbManager
     private var ptpConnection: CustomPtpConnection? = null
-    private val usbPermissionReceiver = UsbPermissionReceiver()
+    private val usbPermissionReceiver = object : BroadcastReceiver() {
+        @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+        override fun onReceive(context: Context, intent: Intent) {
+            Log.d("PTP", "Dynamically received: ${intent.action}")
+            UsbPermissionReceiver().onReceive(context, intent)
+        }
+    }
 
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
@@ -41,7 +50,7 @@ class MainActivity : AppCompatActivity() {
 
         val filter = IntentFilter(UsbManager.ACTION_USB_DEVICE_ATTACHED)
         filter.addAction("com.example.cameraptp.USB_PERMISSION")
-        registerReceiver(usbPermissionReceiver, filter, RECEIVER_NOT_EXPORTED)
+        registerReceiver(usbPermissionReceiver, filter, RECEIVER_EXPORTED)
     }
 
     fun setupPtpConnection(device: UsbDevice, connection: UsbDeviceConnection) {
