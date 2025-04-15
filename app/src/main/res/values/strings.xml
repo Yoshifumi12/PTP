@@ -1,5 +1,10 @@
 <resources>
     <string name="app_name">CameraPTP</string>
-    <string name="waiting_for_camera_connection">Waiting for camera connection...</string>
+    <string name="waiting_for_camera_connection">Waiting for camera connection…</string>
+    <string name="camera_connected">Camera connected: %1$s</string>
+    <string name="error_message">Error: %1$s</string>
+    <string name="photo_saved">Saved: %1$s</string>
+    <string name="no_camera_connected">No camera connected</string>
+    <string name="no_photos_found">No photos found</string>
     <string name="download_photo">Download Photo</string>
 </resources>

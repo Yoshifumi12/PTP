@@ -4,6 +4,7 @@ import android.content.IntentFilter
 import android.hardware.usb.*
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
@@ -16,7 +17,6 @@ import com.rupiapps.ptp.datacallbacks.DataCallback
 import java.io.File
 import java.io.FileOutputStream
 import java.io.OutputStream
-import com.example.cameraptp.UsbPermissionReceiver
 
 class MainActivity : AppCompatActivity() {
 
@@ -45,55 +45,72 @@ class MainActivity : AppCompatActivity() {
     }
 
     fun setupPtpConnection(device: UsbDevice, connection: UsbDeviceConnection) {
+        Log.d("PTP", "setupPtpConnection() called")
         try {
+            Log.d("PTP", "Finding PTP interface...")
             val ptpInterface = device.findPtpInterface() ?: throw Exception("No PTP interface found")
+            Log.d("PTP", "PTP interface found")
             val endpoints = AndroidPtpUsbEndpoints(connection, ptpInterface)
+            Log.d("PTP", "Endpoints created")
+
             val usbPort = PtpUsbPort(endpoints)
+            Log.d("PTP", "USB Port created")
 
             ptpConnection = CustomPtpConnection(usbPort).apply {
+                Log.d("PTP", "Calling connectAndInit...")
                 connectAndInit(byteArrayOf(), device.deviceName) {}
+                Log.d("PTP", "connectAndInit callback reached")
                 runOnUiThread {
-                    statusText.text = "Camera connected: ${device.deviceName}"
+                    statusText.text = getString(R.string.camera_connected, device.deviceName)
                     downloadButton.isEnabled = true
                 }
             }
         } catch (e: Exception) {
+            Log.e("PTP", "Error in setupPtpConnection: ${e.message}", e)
             runOnUiThread {
-                statusText.text = "Error: ${e.message}"
+                statusText.text = getString(R.string.error_message, e.message)
                 Toast.makeText(this, "Connection failed", Toast.LENGTH_SHORT).show()
             }
         }
     }
 
     private fun downloadLatestPhoto() {
+        Log.d("PTP", "downloadLatestPhoto() called")
         val connection = ptpConnection ?: run {
-            statusText.text = "No camera connected"
+            Log.w("PTP", "No camera connected")
+            statusText.text = getString(R.string.no_camera_connected)
             return
         }
 
         try {
+            Log.d("PTP", "Sending OpenSession request")
             connection.sendRequest(PtpOperationCode.OpenSession.value, 1, intArrayOf(1), 5000)
 
+            Log.d("PTP", "Getting object handles")
             val handles = connection.getObjectHandles(0xFFFFFFFF.toInt(), 0, 0xFFFFFFFF.toInt())
 
+            Log.d("PTP", "Handles retrieved: ${handles.size}")
             if (handles.isEmpty()) {
-                statusText.text = "No photos found"
+                statusText.text = getString(R.string.no_photos_found)
                 return
             }
 
             val latestHandle = handles.last()
+            Log.d("PTP", "Latest photo handle: $latestHandle")
             val photoFile = File(getExternalFilesDir(null), "photo_$latestHandle.jpg")
+            Log.d("PTP", "Downloading object handle: $latestHandle")
+
 
             connection.getObject(latestHandle, FileOutputStream(photoFile))
 
             runOnUiThread {
-                statusText.text = "Saved: ${photoFile.name}"
+                statusText.text = getString(R.string.photo_saved, photoFile.name)
                 Toast.makeText(this, "Photo downloaded!", Toast.LENGTH_SHORT).show()
             }
 
         } catch (e: Exception) {
             runOnUiThread {
-                statusText.text = "Error: ${e.message}"
+                statusText.text = getString(R.string.error_message, e.message)
                 Toast.makeText(this, "Download failed", Toast.LENGTH_SHORT).show()
             }
         } finally {
