@@ -17,9 +17,27 @@ class UsbPermissionReceiver : BroadcastReceiver() {
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     override fun onReceive(context: Context, intent: Intent) {
         Log.d("PTP", "Broadcast received: ${intent.action}")
+
+        val extras = intent.extras
+        if (extras != null) {
+            Log.d("PTP", "Intent extras:")
+            for (key in extras.keySet()) {
+                Log.d("PTP", "  $key -> ${extras.get(key)}")
+            }
+        } else {
+            Log.d("PTP", "No extras found in intent.")
+        }
+
         if (UsbManager.ACTION_USB_DEVICE_ATTACHED == intent.action) {
             Log.d("PTP", "USB device attached")
-            val device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+            val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE) as? UsbDevice
+            }
+
+
 
             device?.let {
                 val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
@@ -36,7 +54,7 @@ class UsbPermissionReceiver : BroadcastReceiver() {
         }
 
         if ("com.example.cameraptp.USB_PERMISSION" == intent.action) {
-            val device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+            val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
 
             if (device != null && intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
                 Log.d("PTP", "Permission granted for device: ${device.deviceName}")

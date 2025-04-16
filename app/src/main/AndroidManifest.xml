@@ -3,6 +3,7 @@
     package="com.example.cameraptp">
 
     <uses-feature android:name="android.hardware.usb.host" />
+    <uses-permission android:name="android.hardware.usb.host" />
 
     <application
         android:allowBackup="true"

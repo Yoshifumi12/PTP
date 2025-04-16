@@ -1,7 +1,6 @@
 package com.example.cameraptp
 
-import android.content.BroadcastReceiver
-import android.content.Context
+import android.app.PendingIntent
 import android.content.Intent
 import android.content.IntentFilter
 import android.hardware.usb.*
@@ -27,14 +26,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var downloadButton: Button
     private lateinit var usbManager: UsbManager
     private var ptpConnection: CustomPtpConnection? = null
-    private val usbPermissionReceiver = object : BroadcastReceiver() {
-        @RequiresApi(Build.VERSION_CODES.TIRAMISU)
-        override fun onReceive(context: Context, intent: Intent) {
-            Log.d("PTP", "Dynamically received: ${intent.action}")
-            UsbPermissionReceiver().onReceive(context, intent)
-        }
-    }
-
+    private val usbPermissionReceiver = UsbPermissionReceiver()
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -51,6 +43,27 @@ class MainActivity : AppCompatActivity() {
         val filter = IntentFilter(UsbManager.ACTION_USB_DEVICE_ATTACHED)
         filter.addAction("com.example.cameraptp.USB_PERMISSION")
         registerReceiver(usbPermissionReceiver, filter, RECEIVER_EXPORTED)
+
+        val deviceList = usbManager.deviceList
+        for (device in deviceList.values) {
+            if (device.deviceClass == UsbConstants.USB_CLASS_STILL_IMAGE || device.findPtpInterface() != null) {
+                if (!usbManager.hasPermission(device)) {
+                    val permissionIntent = PendingIntent.getBroadcast(
+                        this,
+                        0,
+                        Intent("com.example.cameraptp.USB_PERMISSION"),
+                        PendingIntent.FLAG_IMMUTABLE
+                    )
+                    usbManager.requestPermission(device, permissionIntent)
+                } else {
+                    val connection = usbManager.openDevice(device)
+                    if (connection != null) {
+                        setupPtpConnection(device, connection)
+                    }
+                }
+            }
+        }
+
     }
 
     fun setupPtpConnection(device: UsbDevice, connection: UsbDeviceConnection) {
@@ -108,7 +121,6 @@ class MainActivity : AppCompatActivity() {
             Log.d("PTP", "Latest photo handle: $latestHandle")
             val photoFile = File(getExternalFilesDir(null), "photo_$latestHandle.jpg")
             Log.d("PTP", "Downloading object handle: $latestHandle")
-
 
             connection.getObject(latestHandle, FileOutputStream(photoFile))
 
@@ -173,8 +185,34 @@ class MainActivity : AppCompatActivity() {
         }
 
         override fun readDataIn(buffer: ByteArray?): Int {
-            return connection.bulkTransfer(inEndpoint, buffer, buffer?.size ?: 0, 5000)
+            Log.d("PTP", "readDataIn() called. Buffer size: ${buffer?.size ?: 0}")
+
+            if (buffer == null) return 0
+
+            var totalRead = 0
+            var attempt = 0
+            while (totalRead == 0 && attempt < 5) {
+                val bytesRead = connection.bulkTransfer(inEndpoint, buffer, buffer.size, 5000)
+                if (bytesRead < 0) {
+                    Log.w("PTP", "Attempt $attempt: bulkTransfer returned -1, retrying...")
+                } else {
+                    totalRead = bytesRead
+                    Log.d("PTP", "readDataIn() successful. Bytes read: $totalRead")
+                    val preview = buffer.take(totalRead).joinToString(" ") { String.format("%02X", it) }
+                    Log.d("PTP", "Data read (hex preview): $preview")
+                }
+                attempt++
+            }
+
+            if (totalRead == 0) {
+                Log.e("PTP", "bulkTransfer failed in readDataIn (no data after $attempt attempts)")
+                throw RuntimeException("Failed to read data from IN endpoint")
+            }
+
+            return totalRead
         }
+
+
 
         override fun getMaxPacketSizeOut(): Int = outEndpoint?.maxPacketSize ?: 512
         override fun getMaxPacketSizeIn(): Int = inEndpoint?.maxPacketSize ?: 512
@@ -184,11 +222,11 @@ class MainActivity : AppCompatActivity() {
 
         override fun getMaxPacketSizeInterrupt(): Int = 64
         override fun readEvent(buffer: ByteArray?, bulk: Boolean) {
-            TODO("Not yet implemented")
+            // not used
         }
 
         override fun setTimeOut(timeout: Int) {
-            TODO("Not yet implemented")
+            // not used
         }
     }
 
