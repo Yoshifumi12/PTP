@@ -12,6 +12,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
 import com.rupiapps.ptp.connection.ptpusb.PtpConnection_Usb
 import com.rupiapps.ptp.connection.ptpusb.PtpUsbEndpoints
 import com.rupiapps.ptp.connection.ptpusb.PtpUsbPort
@@ -19,6 +20,8 @@ import com.rupiapps.ptp.datacallbacks.DataCallback
 import java.io.File
 import java.io.FileOutputStream
 import java.io.OutputStream
+import kotlinx.coroutines.*
+
 
 class MainActivity : AppCompatActivity() {
 
@@ -37,7 +40,12 @@ class MainActivity : AppCompatActivity() {
         downloadButton = findViewById(R.id.downloadButton)
         usbManager = getSystemService(USB_SERVICE) as UsbManager
 
-        downloadButton.setOnClickListener { downloadLatestPhoto() }
+        downloadButton.setOnClickListener {
+            lifecycleScope.launch {
+                downloadAllPhotosAsync()
+            }
+        }
+
         downloadButton.isEnabled = false
 
         val filter = IntentFilter(UsbManager.ACTION_USB_DEVICE_ATTACHED)
@@ -47,12 +55,23 @@ class MainActivity : AppCompatActivity() {
         val deviceList = usbManager.deviceList
         for (device in deviceList.values) {
             if (device.deviceClass == UsbConstants.USB_CLASS_STILL_IMAGE || device.findPtpInterface() != null) {
+                Log.d("PTP", "Camera Detected:")
+                Log.d("PTP", "Device Name: ${device.deviceName}")
+                Log.d("PTP", "Vendor ID: ${device.vendorId}")
+                Log.d("PTP", "Product ID: ${device.productId}")
+                Log.d("PTP", "Manufacturer Name: ${device.manufacturerName}")
+                Log.d("PTP", "Product Name: ${device.productName}")
+                Log.d("PTP", "Serial Number: ${device.serialNumber}")
+                Log.d("PTP", "Device Class: ${device.deviceClass}")
+                Log.d("PTP", "Device Subclass: ${device.deviceSubclass}")
+                Log.d("PTP", "Device Protocol: ${device.deviceProtocol}")
+
                 if (!usbManager.hasPermission(device)) {
                     val permissionIntent = PendingIntent.getBroadcast(
                         this,
                         0,
-                        Intent("com.example.cameraptp.USB_PERMISSION"),
-                        PendingIntent.FLAG_IMMUTABLE
+                        Intent(this, UsbPermissionReceiver::class.java).setAction("com.example.cameraptp.USB_PERMISSION"),
+                        PendingIntent.FLAG_MUTABLE
                     )
                     usbManager.requestPermission(device, permissionIntent)
                 } else {
@@ -96,48 +115,65 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun downloadLatestPhoto() {
-        Log.d("PTP", "downloadLatestPhoto() called")
+    private suspend fun downloadAllPhotosAsync() = withContext(Dispatchers.IO) {
+        Log.d("PTP", "downloadAllPhotosAsync() called")
         val connection = ptpConnection ?: run {
-            Log.w("PTP", "No camera connected")
-            statusText.text = getString(R.string.no_camera_connected)
-            return
+            withContext(Dispatchers.Main) {
+                Log.w("PTP", "No camera connected")
+                statusText.text = getString(R.string.no_camera_connected)
+            }
+            return@withContext
         }
 
         try {
             Log.d("PTP", "Sending OpenSession request")
-            connection.sendRequest(PtpOperationCode.OpenSession.value, 1, intArrayOf(1), 5000)
+            val transactionId = connection.getNextTransactionId()
+            connection.sendRequest(PtpOperationCode.OpenSession.value, transactionId, intArrayOf(1), 5000)
 
             Log.d("PTP", "Getting object handles")
             val handles = connection.getObjectHandles(0xFFFFFFFF.toInt(), 0, 0xFFFFFFFF.toInt())
+            Log.d("PTP", "$handles")
 
             Log.d("PTP", "Handles retrieved: ${handles.size}")
             if (handles.isEmpty()) {
-                statusText.text = getString(R.string.no_photos_found)
-                return
+                withContext(Dispatchers.Main) {
+                    statusText.text = getString(R.string.no_photos_found)
+                }
+                return@withContext
             }
 
-            val latestHandle = handles.last()
-            Log.d("PTP", "Latest photo handle: $latestHandle")
-            val photoFile = File(getExternalFilesDir(null), "photo_$latestHandle.jpg")
-            Log.d("PTP", "Downloading object handle: $latestHandle")
+            for (handle in handles) {
+                try {
+                    val fileName = "photo_$handle.jpg"
+                    val photoFile = File(getExternalFilesDir(null), fileName)
 
-            connection.getObject(latestHandle, FileOutputStream(photoFile))
+                    Log.d("PTP", "Downloading handle $handle to $fileName")
 
-            runOnUiThread {
-                statusText.text = getString(R.string.photo_saved, photoFile.name)
-                Toast.makeText(this, "Photo downloaded!", Toast.LENGTH_SHORT).show()
+                    connection.getObject(handle, FileOutputStream(photoFile))
+
+                    Log.d("PTP", "Saved $fileName")
+                } catch (e: Exception) {
+                    Log.e("PTP", "Error downloading photo with handle $handle: ${e.message}", e)
+                }
+            }
+
+            withContext(Dispatchers.Main) {
+                statusText.text = "All photos downloaded!"
+                Toast.makeText(this@MainActivity, "Done downloading all photos!", Toast.LENGTH_SHORT).show()
             }
 
         } catch (e: Exception) {
-            runOnUiThread {
+            Log.e("PTP", "Error downloading photos: ${e.message}", e)
+            withContext(Dispatchers.Main) {
                 statusText.text = getString(R.string.error_message, e.message)
-                Toast.makeText(this, "Download failed", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, "Download failed", Toast.LENGTH_SHORT).show()
             }
         } finally {
             connection.disconnect()
         }
     }
+
+
 
     override fun onDestroy() {
         ptpConnection?.disconnect()
@@ -146,22 +182,38 @@ class MainActivity : AppCompatActivity() {
     }
 
     class CustomPtpConnection(port: PtpUsbPort) : PtpConnection_Usb(port) {
+
+        private var currentTransactionId = 1
+
+        fun getNextTransactionId(): Int {
+            val id = currentTransactionId
+            currentTransactionId++
+            return id
+        }
+
         fun getObjectHandles(storageId: Int, formatCode: Int, parentObject: Int): List<Int> {
             val callback = ObjectHandlesCallback()
-            requestData(callback, PtpOperationCode.GetObjectHandles.value, 1, intArrayOf(storageId, formatCode, parentObject), 5000)
+            val transactionId = getNextTransactionId()
+            requestData(callback, PtpOperationCode.GetObjectHandles.value, transactionId, intArrayOf(storageId, formatCode, parentObject), 5000)
             return callback.handles.toList()
         }
 
         fun getObject(handle: Int, outputStream: OutputStream) {
             val callback = ObjectDataCallback(outputStream)
-            requestData(callback, PtpOperationCode.GetObject.value, 1, intArrayOf(handle), 10000)
+            val transactionId = getNextTransactionId()
+            requestData(callback, PtpOperationCode.GetObject.value, transactionId, intArrayOf(handle), 10000)
+        }
+        override fun sendRequest(operationCode: Short, transactionId: Int, params: IntArray, timeout: Int) {
+            super.sendRequest(operationCode, transactionId, params, timeout)
         }
     }
 
     enum class PtpOperationCode(val value: Short) {
         OpenSession(0x1002),
         GetObjectHandles(0x1007),
+        GetObjectInfo(0x1008),
         GetObject(0x1009)
+
     }
 
     inner class AndroidPtpUsbEndpoints(
@@ -173,7 +225,8 @@ class MainActivity : AppCompatActivity() {
         private val outEndpoint = usbInterface.endpoints.firstOrNull { it.direction == UsbConstants.USB_DIR_OUT }
 
         override fun initalize() {
-            connection.claimInterface(usbInterface, true)
+            val claimed = connection.claimInterface(usbInterface, true)
+            Log.d("PTP", "Interface claimed: $claimed")
         }
 
         override fun release() {
@@ -181,7 +234,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         override fun writeDataOut(buffer: ByteArray?, length: Int): Int {
-            return connection.bulkTransfer(outEndpoint, buffer, length, 5000)
+            return connection.bulkTransfer(outEndpoint, buffer, length, 30000)
         }
 
         override fun readDataIn(buffer: ByteArray?): Int {
@@ -191,28 +244,40 @@ class MainActivity : AppCompatActivity() {
 
             var totalRead = 0
             var attempt = 0
-            while (totalRead == 0 && attempt < 5) {
-                val bytesRead = connection.bulkTransfer(inEndpoint, buffer, buffer.size, 5000)
-                if (bytesRead < 0) {
-                    Log.w("PTP", "Attempt $attempt: bulkTransfer returned -1, retrying...")
-                } else {
-                    totalRead = bytesRead
-                    Log.d("PTP", "readDataIn() successful. Bytes read: $totalRead")
-                    val preview = buffer.take(totalRead).joinToString(" ") { String.format("%02X", it) }
-                    Log.d("PTP", "Data read (hex preview): $preview")
+            val maxAttempts = 5
+            var lastError = ""
+
+            while (attempt < maxAttempts) {
+                try {
+                    val bytesRead = connection.bulkTransfer(inEndpoint, buffer, buffer.size, 10000)  // 10s timeout
+                    if (bytesRead > 0) {
+                        totalRead = bytesRead
+                        Log.d("PTP", "Bulk transfer succeeded. Bytes read: $bytesRead")
+                        break
+                    } else {
+                        lastError = "Bulk transfer failed with $bytesRead bytes read"
+                        Log.w("PTP", "Attempt $attempt: $lastError")
+                    }
+                } catch (e: Exception) {
+                    lastError = "Exception during bulk transfer: ${e.message}"
+                    Log.e("PTP", "Attempt $attempt: $lastError", e)
                 }
+
                 attempt++
+                if (attempt < maxAttempts) {
+                    // Exponential backoff
+                    Log.d("PTP", "Retrying in ${attempt * 1000}ms")
+                    Thread.sleep(attempt * 1000L) // Increase wait time between retries
+                }
             }
 
-            if (totalRead == 0) {
-                Log.e("PTP", "bulkTransfer failed in readDataIn (no data after $attempt attempts)")
-                throw RuntimeException("Failed to read data from IN endpoint")
+            if (totalRead <= 0) {
+                Log.e("PTP", "bulkTransfer failed after $maxAttempts attempts. Last error: $lastError")
+                throw RuntimeException("Failed to read data from IN endpoint after $maxAttempts attempts")
             }
 
             return totalRead
         }
-
-
 
         override fun getMaxPacketSizeOut(): Int = outEndpoint?.maxPacketSize ?: 512
         override fun getMaxPacketSizeIn(): Int = inEndpoint?.maxPacketSize ?: 512
@@ -234,13 +299,15 @@ class MainActivity : AppCompatActivity() {
         val handles = mutableListOf<Int>()
         override fun receivedDataPacket(transactionid: Int, totaldatasize: Long, cumulateddatasize: Long, data: ByteArray?, offset: Int, length: Int) {
             if (data != null) {
-                for (i in offset until offset + length step 4) {
+                Log.d("PTP", "Received data: ${data.joinToString(", ")}")
+                for (i in offset +4 until offset + length step 4) {
                     if (i + 3 < data.size) {
                         val handle = (data[i + 3].toInt() and 0xFF shl 24) or
                                 (data[i + 2].toInt() and 0xFF shl 16) or
                                 (data[i + 1].toInt() and 0xFF shl 8) or
                                 (data[i].toInt() and 0xFF)
                         handles.add(handle)
+                        Log.d("PTP", "Found handle: $handle")
                     }
                 }
             }
@@ -248,9 +315,27 @@ class MainActivity : AppCompatActivity() {
     }
 
     class ObjectDataCallback(private val outputStream: OutputStream) : DataCallback {
-        override fun receivedDataPacket(transactionid: Int, totaldatasize: Long, cumulateddatasize: Long, data: ByteArray?, offset: Int, length: Int) {
-            if (data != null && length > 0) {
+        override fun receivedDataPacket(
+            transactionid: Int,
+            totaldatasize: Long,
+            cumulateddatasize: Long,
+            data: ByteArray?,
+            offset: Int,
+            length: Int
+        ) {
+            if (data == null) {
+                Log.e("PTP", "receivedDataPacket(): data is null!")
+                return
+            }
+            if (length <= 0) {
+                Log.w("PTP", "receivedDataPacket(): length is zero or negative: $length")
+                return
+            }
+            try {
                 outputStream.write(data, offset, length)
+                Log.d("PTP", "Written data to output stream, size: $length")
+            } catch (e: Exception) {
+                Log.e("PTP", "Error writing to output stream: ${e.message}", e)
             }
         }
     }

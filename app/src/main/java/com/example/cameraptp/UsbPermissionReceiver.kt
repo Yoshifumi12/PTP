@@ -45,9 +45,10 @@ class UsbPermissionReceiver : BroadcastReceiver() {
                 val permissionIntent = PendingIntent.getBroadcast(
                     context,
                     0,
-                    Intent("com.example.cameraptp.USB_PERMISSION"),
-                    PendingIntent.FLAG_IMMUTABLE
+                    Intent(context, UsbPermissionReceiver::class.java).setAction("com.example.cameraptp.USB_PERMISSION"),
+                    PendingIntent.FLAG_MUTABLE
                 )
+
                 Log.d("PTP", "Requesting permission for device: ${device.deviceName}")
                 usbManager.requestPermission(it, permissionIntent)
             }
